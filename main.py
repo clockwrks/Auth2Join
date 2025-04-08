@@ -7,7 +7,7 @@ from typing import Optional
 
 logging.basicConfig(
     level=logging.INFO,
-    format='\x1b[38;5;9m[\x1b[0m%(asctime)s\x1b[38;5;9m]\x1b[0m %(message)s\x1b[0m',
+    format='[38;5;9m[[0m%(asctime)s[38;5;9m][0m %(message)s[0m',
     datefmt='%H:%M:%S'
 )
 
@@ -18,6 +18,7 @@ class Auth2Join:
         self.clientId = clientId
         self.redirectUri = uri
         self.clientSecret = clientSecret
+        self.joinedTokens = []
 
     async def authorizeToken(self, token : str, session : aiohttp.ClientSession) -> Optional[str]:
         params = {
@@ -81,31 +82,30 @@ class Auth2Join:
             logging.error('Error in codeToaccessToken for code %s: %s' % (code, str(exc)))
             return None
 
-    async def processToken(self, token : str, session : aiohttp.ClientSession) -> bool:
-        token = token.strip()
+    async def processToken(self, rawToken : str, session : aiohttp.ClientSession) -> bool:
+        token = rawToken.strip()
+        if ':' in token:
+            parts = token.split(':')
+            token = parts[-1].strip()
         if not token:
             return False
-        
+
         userId = self.tokenUserId(token)
         if userId == 0:
             logging.info('Invalid token %s' % token)
             return False
-        
+
         code = await self.authorizeToken(token, session)
         if code is None:
             logging.info('Authorization failed for user %s' % userId)
             return False
-        
+
         accessToken = await self.codeToaccessToken(code, session)
         if accessToken is None:
             logging.info('Access token retrieval failed for user %s' % userId)
             return False
-        
+
         logging.info('Access token retrieved for user %s' % userId)
-        if accessToken is None:
-            logging.info('Access token is None for user %s' % userId)
-            return False
-        
         headers = {
             'Authorization' : 'Bot %s' % self.botToken,
             'Content-Type' : 'application/json'
@@ -116,6 +116,7 @@ class Auth2Join:
         try:
             async with session.put('https://discord.com/api/v8/guilds/%s/members/%s' % (self.guildId, userId), headers = headers, json = payload, timeout = 3) as resp:
                 if resp.status in [200, 201, 204]:
+                    self.joinedTokens.append(token)
                     logging.info('Joined user %s' % userId)
                     return True
                 else:
@@ -128,8 +129,8 @@ class Auth2Join:
 
     async def Join(self) -> None:
         try:
-            with open('tokens.txt', 'r') as fileObj:
-                tokensList = fileObj.readlines()
+            with open('tokens.txt', 'r') as tokenFiles:
+                tokensList = tokenFiles.readlines()
             totalTokens = len(tokensList)
             logging.info('Loaded %s tokens from tokens.txt' % totalTokens)
         except Exception as excErorr:
@@ -143,8 +144,12 @@ class Auth2Join:
             for result in results:
                 if isinstance(result, bool) and result:
                     addedTokens += 1
-        logging.info('Added %s tokens to guild %s' % (addedTokens, self.guildId))
 
+        logging.info('Added %s tokens to guild %s' % (addedTokens, self.guildId))
+        if self.joinedTokens:
+            with open('joinedTokens.txt', 'w') as outFile:
+                for token in self.joinedTokens:
+                    outFile.write('%s\n' % token)
 
 if __name__ == '__main__':
     try:
